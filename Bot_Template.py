@@ -5,45 +5,103 @@ import os
 import youtube_dl
 from youtube_dl import YoutubeDL
 import discord
-from discord.ext import commands    
+from discord.ext import commands   
+import random 
 
 client = commands.Bot(command_prefix=",")
 
+global source
 source = []
-info_playlist = []
+
+global looping
+looping = False
+
+global loop_index
+loop_index = 0
 
 FFMPEG_OPTIONS = {"before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", "options": "-vn"}
-ydl_opts = {"format": "bestaudio/best"}
+ydl_opts = {"format": "bestaudio/best", 'noplaylist': False}
 
-def auto_skip(error):
+async def auto_skip(error):
 
-    default_channel = client.get_channel("channel id")
-    
+    default_channel = client.get_channel("music_channel")
+
     voice = reusable_voice
 
-    if len(source) > 1:
-        voice.stop()
-        source.pop(0)
-        info_playlist.pop(0)
-        voice.play(source[0],after=auto_skip)
-        default_channel.send(f"Nova medida do Chega: **{info_playlist[0]}**.")
+    global loop_index
+
+    global looping
+
+    if not voice.is_playing():
+
+        if not looping:
+            
+            if len(source) > 1:
+            
+                source.pop(0)
+                voice.play(await discord.FFmpegOpusAudio.from_probe(source[0][0], **FFMPEG_OPTIONS), after=lambda x: client.loop.create_task(auto_skip(x)))
+                return await default_channel.send(f"Nova medida do Chega: **{source[0][1]}**.")
+            else:
+
+                voice.stop()
+
+        else:
+            
+            source.append(source[0])
+            source.pop(0)
+            voice.play(await discord.FFmpegOpusAudio.from_probe(source[0][0], **FFMPEG_OPTIONS), after=lambda x: client.loop.create_task(auto_skip(x)))
+            return await default_channel.send(f"Nova medida do Chega: **{source[0][1]}**.")
+            
     else:
-        default_channel.send("Huh... em abstenção mais uma vez!")
+
+        voice.stop()
 
 async def search_yt(item):
 
     with YoutubeDL(ydl_opts) as ydl:
         
-        playlist = ydl.extract_info("ytsearch:{}".format(item), download=False)['entries']
-        for i in playlist:
-            source.append(await discord.FFmpegOpusAudio.from_probe(i['formats'][0]['url'], **FFMPEG_OPTIONS))
-            info_playlist.append(i["title"])
-  
+        playlist = ydl.extract_info("ytsearch:{}".format(item), download=False)
+        for i in playlist["entries"]:
+            source.append((i['formats'][0]['url'], i["title"]))
+
+@client.command(name="loop", aliases =["l"])
+async def loop(ctx):
+
+    default_channel = client.get_channel("music_channel")
+
+    global looping
+
+    looping = True
+
+    return await default_channel.send(f"É o mesmo programa todo o ano!")
+
+@client.command(name="unloop")
+async def unloop(ctx):
+
+    default_channel = client.get_channel("music_channel")
+
+    global looping
+
+    looping = False
+
+    return await default_channel.send(f"O programa vai ser descontinuado este ano")
+
+
+@client.command(name="shuffle")
+async def shuffle(ctx):
+
+    global source 
+    temp_0 = source[0]
+    source.pop(0)
+    random.shuffle(source)
+    source = [temp_0] + source
+
+    await queue(ctx)
 
 @client.command(name='play', aliases=['p'])
 async def play(ctx, *url):
 
-    default_channel = client.get_channel("channel id")
+    default_channel = client.get_channel("music_channel")
 
     search_info = ""
     for i in url:
@@ -67,22 +125,19 @@ async def play(ctx, *url):
     reusable_voice = voice  
 
     await search_yt(search_info)
-    print(source, info_playlist)
     if not voice.is_playing():
-        await default_channel.send(f"Nova medida do Chega: **{info_playlist[0]}**.")
-        return voice.play(source[0],after=auto_skip)
+        await default_channel.send(f"Nova medida do Chega: **{source[0][1]}**.")
+        return voice.play(await discord.FFmpegOpusAudio.from_probe(source[0][0], **FFMPEG_OPTIONS),after=lambda x: client.loop.create_task(auto_skip(x)))
     else:
-        return await default_channel.send(f"**{info_playlist[-1]}** foi proposta em parlamento.")
+        return await default_channel.send(f"**{source[-1][1]}** foi proposta em parlamento.")
 
 @client.command(name='leave', aliases=["dc","stop"])
 async def leave(ctx):
 
-    default_channel = client.get_channel("channel id")
+    default_channel = client.get_channel("music_channel")
 
     global source
     source = []
-    global info_playlist
-    info_playlist = []
 
     if ctx.message.channel != default_channel:
         return await default_channel.send(f"{ctx.author.mention}, não é aí seu burro do caralho!")
@@ -96,28 +151,20 @@ async def leave(ctx):
 @client.command(name='next', aliases=["n","skip","s"])
 async def next(ctx):
 
-    default_channel = client.get_channel("channel id")
+    default_channel = client.get_channel("music_channel")
 
     if ctx.message.channel != default_channel:
         return await default_channel.send(f"{ctx.author.mention}, não é aí seu burro do caralho!")
 
-    voice = ctx.voice_client
-    if len(source) > 1:
-        await voice.stop()
-        source.pop(0)
-        info_playlist.pop(0)
-        voice.play(source[0],after=auto_skip)
-        return await default_channel.send(f"Nova medida do Chega: **{info_playlist[0]}**.")
-    else:
-        return await default_channel.send("Não temos mais medidas no programa.")
+    return await auto_skip("-")
 
 @client.command(name='remove', aliases=['r'])
 async def remove(ctx, *musictup):
 
-    default_channel = client.get_channel("channel id")
+    default_channel = client.get_channel("music_channel")
     voice = ctx.voice_client
 
-    if info_playlist == []:
+    if source == []:
         return await default_channel.send("Ainda nem sequer temos medidas.")
 
     if ctx.message.channel != default_channel:
@@ -127,15 +174,14 @@ async def remove(ctx, *musictup):
         try:
             music = musictup[0]
             i = int(music)
-            temp_name = info_playlist[i - 1]
-            if i == 1 and len(info_playlist) == 1:
+            temp_name = source[i - 1][1]
+            if i == 1 and len(source) == 1:
                 voice.stop()
                 return await default_channel.send(f"**{temp_name}** já não faz parte do programa do Chega!")
-            elif i == 1 and len(info_playlist) > 1:
+            elif i == 1 and len(source) > 1:
                 auto_skip("-")
                 return await default_channel.send(f"**{temp_name}** já não faz parte do programa do Chega!")
             source.pop(i - 1)
-            info_playlist.pop(i - 1)
             return await default_channel.send(f"**{temp_name}** já não faz parte do programa do Chega!")
         except:
             return await default_channel.send(f"Não temos uma medida número {i}, ok?")
@@ -143,24 +189,23 @@ async def remove(ctx, *musictup):
         music = ""
         for i in musictup:
             music += i + " "
-        for i in range(len(info_playlist)):
-            if music.lower() in info_playlist[i].lower() and i == 0 and len(info_playlist) == 1:
+        for i in range(len(source)):
+            if music.lower() in source[i][1].lower() and i == 0 and len(source) == 1:
                 voice.stop()
-                return await default_channel.send(f"**{info_playlist[0]}** já não faz parte do programa do Chega!")
-            elif music.lower() in info_playlist[i].lower() and i == 0 and len(info_playlist) > 1:
+                return await default_channel.send(f"**{source[0][1]}** já não faz parte do programa do Chega!")
+            elif music.lower() in source[i][1].lower() and i == 0 and len(source) > 1:
                 auto_skip("-")
-                return await default_channel.send(f"**{info_playlist[0]}** já não faz parte do programa do Chega!")
-            elif music.lower() in info_playlist[i].lower():
-                temp_name = info_playlist[i]
+                return await default_channel.send(f"**{source[0][1]}** já não faz parte do programa do Chega!")
+            elif music.lower() in source[i][1].lower():
+                temp_name = source[i][1]
                 source.pop(i)
-                info_playlist.pop(i)
                 return await default_channel.send(f"**{temp_name}** já não faz parte do programa do Chega!")
             
 
 @client.command()
 async def pause(ctx):
 
-    default_channel = client.get_channel("channel id")
+    default_channel = client.get_channel("music_channel")
 
     if ctx.message.channel != default_channel:
         return await default_channel.send(f"{ctx.author.mention}, não é aí seu burro do caralho!")
@@ -176,7 +221,7 @@ async def pause(ctx):
 @client.command()
 async def resume(ctx):
 
-    default_channel = client.get_channel("channel id")
+    default_channel = client.get_channel("music_channel")
 
     if ctx.message.channel != default_channel:
         return await default_channel.send(f"{ctx.author.mention}, não é aí seu burro do caralho!")
@@ -192,15 +237,17 @@ async def resume(ctx):
 @client.command(name='queue', aliases=["q"])
 async def queue(ctx):
 
-    default_channel = client.get_channel("channel id")
+    default_channel = client.get_channel("music_channel")
 
-    if info_playlist == []:
+    if source == []:
         return await default_channel.send("Não temos mais medidas para apresentar.")
 
     mes = "**O programa do Chega:** \n"
 
-    for i, tit in enumerate(info_playlist):
-        mes += f"{i+1}. {tit} \n"
+    for i, tit in enumerate(source):
+        mes += f"{i+1}. {tit[1]} \n"
     return await default_channel.send(mes)
 
-client.run("Server Token")
+client.run("token")
+
+'''Make sure to change de dfault music_channel and token!'''
