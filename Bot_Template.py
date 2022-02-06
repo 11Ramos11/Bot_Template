@@ -2,13 +2,15 @@
 from asyncio import tasks
 import asyncio
 import os
+from re import search
 import youtube_dl
 from youtube_dl import YoutubeDL
 import discord
 from discord.ext import commands   
 import random 
+import validators
 
-client = commands.Bot(command_prefix=",")
+client = commands.Bot(command_prefix=",", case_insensitive=True)
 
 global source
 source = []
@@ -20,7 +22,7 @@ global loop_index
 loop_index = 0
 
 FFMPEG_OPTIONS = {"before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", "options": "-vn"}
-ydl_opts = {"format": "bestaudio/best", 'noplaylist': False}
+ydl_opts = {"format": "bestaudio/best"}
 
 async def auto_skip(error):
 
@@ -60,9 +62,14 @@ async def search_yt(item):
 
     with YoutubeDL(ydl_opts) as ydl:
         
-        playlist = ydl.extract_info("ytsearch:{}".format(item), download=False)
+        if validators.url(item):
+            playlist = ydl.extract_info(item, download=False)
+            
+        else:
+            playlist = ydl.extract_info("ytsearch:{}".format(item), download=False)
         for i in playlist["entries"]:
             source.append((i['formats'][0]['url'], i["title"]))
+            
 
 @client.command(name="loop", aliases =["l"])
 async def loop(ctx):
@@ -102,16 +109,20 @@ async def shuffle(ctx):
 async def play(ctx, *url):
 
     default_channel = client.get_channel("music_channel")
-
-    search_info = ""
-    for i in url:
-        search_info += i + " " 
-
+    
     if ctx.message.channel != default_channel:
         return await default_channel.send(f"{ctx.author.mention}, não é aí seu burro do caralho!")
 
     if ctx.author.voice is None:
         return await ctx.send("Entra num canal primeiro, puta!")
+
+    if not validators.url(url[0]):
+        search_info = ""
+        for i in url:
+            search_info += i + " " 
+    else:
+        search_info = url[0]
+        await default_channel.send("Dá-me um segundo que desta vez, temos mais de 10 páginas.")
 
     voice_channel = ctx.author.voice.channel
 
@@ -242,12 +253,22 @@ async def queue(ctx):
     if source == []:
         return await default_channel.send("Não temos mais medidas para apresentar.")
 
-    mes = "**O programa do Chega:** \n"
+    i = 0
+    count = 0
 
-    for i, tit in enumerate(source):
-        mes += f"{i+1}. {tit[1]} \n"
-    return await default_channel.send(mes)
+    while i < len(source):
+        if i == 0:
+            mes = "**O programa do Chega:** \n"
+        else:
+            mes = ""
+        count = len(mes)
+        while count < 1900 and i < len(source):
+            mes += f"{i+1}. {source[i][1]} \n"
+            i += 1
+            count = len(mes)
+            print(count)
+            print(mes)
+        await default_channel.send(mes)
+
 
 client.run("token")
-
-'''Make sure to change de dfault music_channel and token!'''
